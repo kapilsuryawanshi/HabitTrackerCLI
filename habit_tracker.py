@@ -23,33 +23,36 @@ class HabitTracker:
         self.db_path = db_path
         self.init_db()
 
+    def _get_db_connection(self):
+        """Create and return a database connection with a context manager."""
+        return sqlite3.connect(self.db_path)
+        
     def init_db(self):
         """Initialize the database with required tables."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Create habits table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS habits (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL
-            )
-        ''')
-        
-        # Create tracking table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tracking (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                habit_id INTEGER,
-                date TEXT NOT NULL,
-                done BOOLEAN NOT NULL,
-                FOREIGN KEY (habit_id) REFERENCES habits (id),
-                UNIQUE(habit_id, date)
-            )
-        ''')
-        
-        conn.commit()
-        conn.close()
+        try:
+            with self._get_db_connection() as conn:
+                # Create habits table
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS habits (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        name TEXT UNIQUE NOT NULL
+                    )
+                ''')
+                
+                # Create tracking table
+                conn.execute('''
+                    CREATE TABLE IF NOT EXISTS tracking (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        habit_id INTEGER,
+                        date TEXT NOT NULL,
+                        done BOOLEAN NOT NULL,
+                        FOREIGN KEY (habit_id) REFERENCES habits (id),
+                        UNIQUE(habit_id, date)
+                    )
+                ''')
+        except sqlite3.Error as e:
+            print(f"Database initialization error: {e}")
+            raise
 
     def add_habits(self, names: str) -> bool:
         """Add new habits to track from a comma-separated string."""
@@ -72,13 +75,10 @@ class HabitTracker:
     def add_habit(self, name: str) -> bool:
         """Add a new habit to track."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO habits (name) VALUES (?)', (name,))
-            conn.commit()
-            conn.close()
-            print(f"Habit '{name}' added successfully!")
-            return True
+            with self._get_db_connection() as conn:
+                conn.execute('INSERT INTO habits (name) VALUES (?)', (name,))
+                print(f"Habit '{name}' added successfully!")
+                return True
         except sqlite3.IntegrityError:
             print(f"Error: Habit '{name}' already exists!")
             return False
@@ -111,29 +111,24 @@ class HabitTracker:
     def remove_habit(self, habit_id: int) -> bool:
         """Remove a habit and its tracking history by ID."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # First get the habit name
-            cursor.execute('SELECT name FROM habits WHERE id = ?', (habit_id,))
-            result = cursor.fetchone()
-            
-            if not result:
-                print(f"Error: Habit with ID {habit_id} not found!")
-                return False
+            with self._get_db_connection() as conn:
+                # First get the habit name
+                result = conn.execute('SELECT name FROM habits WHERE id = ?', (habit_id,)).fetchone()
                 
-            habit_name = result[0]
-            
-            # Delete tracking records
-            cursor.execute('DELETE FROM tracking WHERE habit_id = ?', (habit_id,))
-            
-            # Delete the habit
-            cursor.execute('DELETE FROM habits WHERE id = ?', (habit_id,))
-            
-            conn.commit()
-            conn.close()
-            print(f"Habit '{habit_name}' (ID: {habit_id}) and its tracking history removed successfully!")
-            return True
+                if not result:
+                    print(f"Error: Habit with ID {habit_id} not found!")
+                    return False
+                    
+                habit_name = result[0]
+                
+                # Delete tracking records
+                conn.execute('DELETE FROM tracking WHERE habit_id = ?', (habit_id,))
+                
+                # Delete the habit
+                conn.execute('DELETE FROM habits WHERE id = ?', (habit_id,))
+                
+                print(f"Habit '{habit_name}' (ID: {habit_id}) and its tracking history removed successfully!")
+                return True
         except Exception as e:
             print(f"Error removing habit: {e}")
             return False
@@ -141,42 +136,36 @@ class HabitTracker:
     def track_habit(self, habit_id: int, done: bool, date_str: str = None) -> bool:
         """Track a habit as done or not done for a specific date by ID."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            cursor = conn.cursor()
-            
-            # Get habit name
-            cursor.execute('SELECT name FROM habits WHERE id = ?', (habit_id,))
-            result = cursor.fetchone()
-            
-            if not result:
-                print(f"Error: Habit with ID {habit_id} not found!")
-                return False
+            with self._get_db_connection() as conn:
+                # Get habit name
+                result = conn.execute('SELECT name FROM habits WHERE id = ?', (habit_id,)).fetchone()
                 
-            habit_name = result[0]
-            
-            # Determine the date to use
-            if date_str:
-                # Validate and convert the date
-                target_date = self._convert_day_to_date(date_str)
-                if not target_date:
+                if not result:
+                    print(f"Error: Habit with ID {habit_id} not found!")
                     return False
-            else:
-                # Use today's date
-                target_date = datetime.now().strftime('%Y-%m-%d')
-            
-            # Insert or update tracking record
-            cursor.execute('''
-                INSERT OR REPLACE INTO tracking (habit_id, date, done)
-                VALUES (?, ?, ?)
-            ''', (habit_id, target_date, done))
-            
-            conn.commit()
-            conn.close()
-            
-            status = "done" if done else "not done"
-            date_display = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y-%m-%d')
-            print(f"Habit '{habit_name}' (ID: {habit_id}) tracked as {status} for {date_display}!")
-            return True
+                    
+                habit_name = result[0]
+                
+                # Determine the date to use
+                if date_str:
+                    # Validate and convert the date
+                    target_date = self._convert_day_to_date(date_str)
+                    if not target_date:
+                        return False
+                else:
+                    # Use today's date
+                    target_date = datetime.now().strftime('%Y-%m-%d')
+                
+                # Insert or update tracking record
+                conn.execute('''
+                    INSERT OR REPLACE INTO tracking (habit_id, date, done)
+                    VALUES (?, ?, ?)
+                ''', (habit_id, target_date, done))
+                
+                status = "done" if done else "not done"
+                date_display = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y-%m-%d')
+                print(f"Habit '{habit_name}' (ID: {habit_id}) tracked as {status} for {date_display}!")
+                return True
         except Exception as e:
             print(f"Error tracking habit: {e}")
             return False
@@ -207,31 +196,31 @@ class HabitTracker:
 
     def get_habits(self) -> List[Tuple[int, str]]:
         """Get all habits."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, name FROM habits ORDER BY id')
-        habits = cursor.fetchall()
-        conn.close()
-        return habits
+        try:
+            with self._get_db_connection() as conn:
+                return conn.execute('SELECT id, name FROM habits ORDER BY id').fetchall()
+        except sqlite3.Error as e:
+            print(f"Error retrieving habits: {e}")
+            return []
 
     def get_tracking_data(self, habit_id: int, dates: List[str]) -> dict:
         """Get tracking data for a habit for specific dates."""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        
-        # Create placeholders for the dates
-        placeholders = ','.join('?' * len(dates))
-        query = f'''
-            SELECT date, done FROM tracking 
-            WHERE habit_id = ? AND date IN ({placeholders})
-        '''
-        
-        cursor.execute(query, [habit_id] + dates)
-        results = cursor.fetchall()
-        conn.close()
-        
-        # Convert to dictionary for easy lookup
-        return {date: done for date, done in results}
+        try:
+            with self._get_db_connection() as conn:
+                # Create placeholders for the dates
+                placeholders = ','.join('?' * len(dates))
+                query = f'''
+                    SELECT date, done FROM tracking 
+                    WHERE habit_id = ? AND date IN ({placeholders})
+                '''
+                
+                results = conn.execute(query, [habit_id] + dates).fetchall()
+                
+                # Convert to dictionary for easy lookup
+                return {date: done for date, done in results}
+        except sqlite3.Error as e:
+            print(f"Error retrieving tracking data: {e}")
+            return {}
 
     def show_calendar(self):
         """Display a calendar view of habit tracking for the last 30 days."""
