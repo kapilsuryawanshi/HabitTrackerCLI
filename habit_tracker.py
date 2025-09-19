@@ -14,6 +14,8 @@ from typing import List, Tuple
 # Color codes for terminal output
 class Colors:
     GREEN = '\033[92m'
+    RED = '\033[91m'
+    YELLOW = '\033[93m'
     RESET = '\033[0m'
 
 
@@ -148,10 +150,20 @@ class HabitTracker:
                 
                 # Determine the date to use
                 if date_str:
-                    # Validate and convert the date
-                    target_date = self._convert_day_to_date(date_str)
-                    if not target_date:
-                        return False
+                    # Check if it's a full date string (YYYY-MM-DD) or a day number
+                    if '-' in date_str:
+                        # It's a full date string
+                        try:
+                            datetime.strptime(date_str, '%Y-%m-%d')
+                            target_date = date_str
+                        except ValueError:
+                            print(f"Error: Invalid date format '{date_str}'. Use YYYY-MM-DD.")
+                            return False
+                    else:
+                        # It's a day number, validate and convert it
+                        target_date = self._convert_day_to_date(date_str)
+                        if not target_date:
+                            return False
                 else:
                     # Use today's date
                     target_date = datetime.now().strftime('%Y-%m-%d')
@@ -222,6 +234,121 @@ class HabitTracker:
             print(f"Error retrieving tracking data: {e}")
             return {}
 
+    def get_all_tracking_data(self, habit_id: int) -> List[Tuple[str, bool]]:
+        """Get all tracking data for a habit, sorted by date."""
+        try:
+            with self._get_db_connection() as conn:
+                query = '''
+                    SELECT date, done FROM tracking 
+                    WHERE habit_id = ? AND done = 1
+                    ORDER BY date
+                '''
+                return conn.execute(query, (habit_id,)).fetchall()
+        except sqlite3.Error as e:
+            print(f"Error retrieving tracking data: {e}")
+            return []
+
+    def calculate_current_streak(self, habit_id: int) -> int:
+        """Calculate the current streak for a habit."""
+        # Get all done dates for this habit, sorted by date
+        tracking_data = self.get_all_tracking_data(habit_id)
+        done_dates = [datetime.strptime(date, '%Y-%m-%d').date() for date, done in tracking_data]
+        
+        if not done_dates:
+            return 0
+            
+        # Start with today's date
+        current_date = datetime.now().date()
+        streak = 0
+        
+        # Check if the habit was done today or yesterday (to account for end of day)
+        # If not, the streak is broken
+        if current_date not in done_dates and (current_date - timedelta(days=1)) not in done_dates:
+            return 0
+            
+        # Count backwards from today
+        while current_date in done_dates:
+            streak += 1
+            current_date -= timedelta(days=1)
+            
+        return streak
+
+    def calculate_longest_streak(self, habit_id: int) -> int:
+        """Calculate the longest streak for a habit."""
+        # Get all done dates for this habit, sorted by date
+        tracking_data = self.get_all_tracking_data(habit_id)
+        done_dates = [datetime.strptime(date, '%Y-%m-%d').date() for date, done in tracking_data]
+        
+        if not done_dates:
+            return 0
+            
+        # Calculate longest consecutive streak
+        longest_streak = 0
+        current_streak = 1
+        
+        for i in range(1, len(done_dates)):
+            # Check if this date is consecutive to the previous one
+            if (done_dates[i] - done_dates[i-1]).days == 1:
+                current_streak += 1
+            else:
+                # Streak is broken, update longest if needed
+                longest_streak = max(longest_streak, current_streak)
+                current_streak = 1
+                
+        # Don't forget to check the final streak
+        longest_streak = max(longest_streak, current_streak)
+        
+        return longest_streak
+
+    def checkin(self) -> bool:
+        """Cycle through all habits and ask user if each one is done for today."""
+        habits = self.get_habits()
+        
+        if not habits:
+            print("No habits found. Add some habits to start tracking!")
+            return False
+            
+        print("Habit Check-in for Today")
+        print("=" * 30)
+        
+        for habit_id, habit_name in habits:
+            # Get current status for today
+            today = datetime.now().strftime('%Y-%m-%d')
+            tracking_data = self.get_tracking_data(habit_id, [today])
+            current_status = tracking_data.get(today, None)
+            
+            # Display current status
+            if current_status is None:
+                status_display = "Not tracked yet"
+            elif current_status:
+                status_display = "Done"
+            else:
+                status_display = "Not done"
+                
+            print(f"\nHabit {habit_id}: {habit_name}")
+            print(f"Current status: {status_display}")
+            
+            # Ask user for today's status
+            while True:
+                response = input("Mark as done today? (y/n/s to skip/q to quit): ").strip().lower()
+                if response in ['y', 'yes']:
+                    self.track_habit(habit_id, True)
+                    break
+                elif response in ['n', 'no']:
+                    self.track_habit(habit_id, False)
+                    break
+                elif response in ['s', 'skip']:
+                    print("Skipping this habit.")
+                    break
+                elif response in ['q', 'quit']:
+                    print("Check-in cancelled.")
+                    return False
+                else:
+                    print("Please enter 'y' for yes, 'n' for no, 's' to skip, or 'q' to quit.")
+        
+        print("\nCheck-in completed!")
+        return True
+
     def show_calendar(self):
         """Display a calendar view of habit tracking for the last 30 days."""
         habits = self.get_habits()
@@ -240,12 +367,16 @@ class HabitTracker:
         date_headers = [datetime.strptime(date, '%Y-%m-%d').strftime('%d') for date in dates]
         
         # Print header
-        print(f"{'ID':<3} {'Habit':<16} " + " ".join(f"{day:>2}" for day in date_headers))
-        print("-" * (20 + 30 * 3))
+        print(f"{'ID':<3} {'Habit':<16} " + " ".join(f"{day:>2}" for day in date_headers) + f" {'Current Streak':>13} {'Longest Streak':>13}")
+        print("-" * (20 + 30 * 3 + 15 + 15))
         
         # Print each habit's tracking data
         for habit_id, habit_name in habits:
             tracking_data = self.get_tracking_data(habit_id, dates)
+            
+            # Calculate streaks
+            current_streak = self.calculate_current_streak(habit_id)
+            longest_streak = self.calculate_longest_streak(habit_id)
             
             # Build row data
             row = f"{habit_id:<3} {habit_name:<16} "
@@ -258,6 +389,17 @@ class HabitTracker:
                 else:  # No data
                     row += " - "
             
+            # Add streak data with colors
+            if current_streak < longest_streak:
+                current_streak_display = f"{Colors.RED}{current_streak:>13}{Colors.RESET}"
+            else:
+                current_streak_display = f"{Colors.GREEN}{current_streak:>13}{Colors.RESET}"
+            
+            # For longest streak, we can use a different color or keep it neutral
+            longest_streak_display = f"{Colors.YELLOW}{longest_streak:>13}{Colors.RESET}"
+            
+            row += f" {current_streak_display} {longest_streak_display}"
+            
             print(row)
 
     def show_help(self):
@@ -269,6 +411,7 @@ Commands:
   add <habit1,habit2,...>  Add new habits (comma-separated)
   remove <id1,id2,...>     Remove habits and their tracking history by IDs (comma-separated)
   rm <id1,id2,...>         Alias for remove command
+  checkin                  Cycle through all habits and track today's progress
   +<id>                    Mark a habit as done for today (by ID)
   +<id> on <day>           Mark a habit as done for a specific day (by ID)
   -<id>                    Mark a habit as not done for today (by ID)
@@ -287,6 +430,7 @@ Examples:
   python habit_tracker.py add "Drink Water,Exercise,Reading"
   python habit_tracker.py remove 1,2,3
   python habit_tracker.py rm 1,2,3
+  python habit_tracker.py checkin
   python habit_tracker.py +1
   python habit_tracker.py +1 on 15
   python habit_tracker.py -1
@@ -357,6 +501,9 @@ def main():
     # Help command
     subparsers.add_parser('help', help='Show this help message')
     
+    # Checkin command
+    subparsers.add_parser('checkin', help='Cycle through all habits and track today\'s progress')
+    
     # Parse arguments
     args = parser.parse_args()
     
@@ -370,6 +517,8 @@ def main():
         tracker.remove_habits(args.habit_ids)
     elif args.command == 'help':
         tracker.show_help()
+    elif args.command == 'checkin':
+        tracker.checkin()
     elif args.command is None:
         # No command provided, show calendar view
         tracker.show_calendar()
