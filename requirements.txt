@@ -1,3 +1,0 @@
-# Habit Tracker CLI Requirements
-
-This application uses only standard Python libraries and requires Python 3.x.

@@ -199,9 +199,9 @@ class HabitTracker:
             date_objects.append(date_obj)
             
         # Find the date that matches the day number
-        for date_obj, date_str in zip(date_objects, dates):
+        for date_obj, date_str_result in zip(date_objects, dates):
             if date_obj.day == day:
-                return date_str
+                return date_str_result
                 
         print(f"Error: Day {day} is not within the last 30 days.")
         return None
@@ -300,22 +300,26 @@ class HabitTracker:
         
         return longest_streak
 
-    def checkin(self) -> bool:
-        """Cycle through all habits and ask user if each one is done for today."""
+    def checkin(self, date_str: str = None) -> bool:
+        """Cycle through all habits and ask user if each one is done for a specific date."""
         habits = self.get_habits()
         
         if not habits:
             print("No habits found. Add some habits to start tracking!")
             return False
+
+        target_date = self._parse_date(date_str)
+        if not target_date:
+            return False
             
-        print("Habit Check-in for Today")
+        date_display = datetime.strptime(target_date, '%Y-%m-%d').strftime('%Y-%m-%d')
+        print(f"Habit Check-in for {date_display}")
         print("=" * 30)
         
         for habit_id, habit_name in habits:
-            # Get current status for today
-            today = datetime.now().strftime('%Y-%m-%d')
-            tracking_data = self.get_tracking_data(habit_id, [today])
-            current_status = tracking_data.get(today, None)
+            # Get current status for the target date
+            tracking_data = self.get_tracking_data(habit_id, [target_date])
+            current_status = tracking_data.get(target_date, None)
             
             # Display current status
             if current_status is None:
@@ -326,16 +330,16 @@ class HabitTracker:
                 status_display = "Not done"
                 
             print(f"\nHabit {habit_id}: {habit_name}")
-            print(f"Current status: {status_display}")
+            print(f"Current status for {date_display}: {status_display}")
             
-            # Ask user for today's status
+            # Ask user for the specified date's status
             while True:
-                response = input("Mark as done today? (y/n/s to skip/q to quit): ").strip().lower()
+                response = input(f"Mark as done for {date_display}? (y/n/s to skip/q to quit): ").strip().lower()
                 if response in ['y', 'yes']:
-                    self.track_habit(habit_id, True)
+                    self.track_habit(habit_id, True, target_date)
                     break
                 elif response in ['n', 'no']:
-                    self.track_habit(habit_id, False)
+                    self.track_habit(habit_id, False, target_date)
                     break
                 elif response in ['s', 'skip']:
                     print("Skipping this habit.")
@@ -346,8 +350,24 @@ class HabitTracker:
                 else:
                     print("Please enter 'y' for yes, 'n' for no, 's' to skip, or 'q' to quit.")
         
-        print("\nCheck-in completed!")
+        print(f"\nCheck-in for {date_display} completed!")
         return True
+
+    def _parse_date(self, date_str: str = None) -> str:
+        """Parse date string and return formatted date, or today if no date provided."""
+        if not date_str:
+            # Use today's date
+            return datetime.now().strftime('%Y-%m-%d')
+        
+        # For checkin command, only allow day numbers, not full dates
+        # Check if it's a full date string (YYYY-MM-DD) or a day number
+        if '-' in date_str:
+            # It's a full date string - for checkin, we want to disallow this
+            print(f"Error: Use day number (e.g., 15) instead of full date (e.g., 2023-09-15) for checkin command")
+            return None
+        else:
+            # It's a day number, validate and convert it
+            return self._convert_day_to_date(date_str)
 
     def show_calendar(self):
         """Display a calendar view of habit tracking for the last 30 days."""
@@ -405,6 +425,7 @@ class HabitTracker:
     def show_help(self):
         """Display detailed help information."""
         help_text = """
+
 Habit Tracker CLI - Detailed Help
 
 Commands:
@@ -412,6 +433,7 @@ Commands:
   remove <id1,id2,...>     Remove habits and their tracking history by IDs (comma-separated)
   rm <id1,id2,...>         Alias for remove command
   checkin                  Cycle through all habits and track today's progress
+  checkin on <day>         Cycle through all habits and track for a specific day (by day number)
   +<id>                    Mark a habit as done for today (by ID)
   +<id> on <day>           Mark a habit as done for a specific day (by ID)
   -<id>                    Mark a habit as not done for today (by ID)
@@ -431,6 +453,7 @@ Examples:
   python habit_tracker.py remove 1,2,3
   python habit_tracker.py rm 1,2,3
   python habit_tracker.py checkin
+  python habit_tracker.py checkin on 15
   python habit_tracker.py +1
   python habit_tracker.py +1 on 15
   python habit_tracker.py -1
@@ -473,12 +496,26 @@ Examples:
             print("Invalid command format. Use +<id> or -<id>")
             return False
 
-
 def main():
     # Check if it's a short command like +1 or -1
     if len(sys.argv) >= 2 and sys.argv[1].startswith(('+', '-')):
         tracker = HabitTracker()
         tracker.parse_short_command(sys.argv[1:])
+        return
+    
+    # Check if it's a checkin command with date parameter
+    if len(sys.argv) >= 2 and sys.argv[1] == 'checkin':
+        tracker = HabitTracker()
+        # Check for "on <day>" pattern (only accept day number, not full date)
+        if len(sys.argv) >= 4 and sys.argv[2].lower() == 'on':
+            day_str = sys.argv[3]
+            # Validate that it's a day number (not a full date)
+            if '-' in day_str:
+                print("Error: Use day number (e.g., 15) instead of full date (e.g., 2023-09-15) for checkin command")
+                return
+            tracker.checkin(date_str=day_str)
+        else:
+            tracker.checkin()  # No date provided, use today
         return
     
     parser = argparse.ArgumentParser(
@@ -494,14 +531,14 @@ def main():
     add_parser = subparsers.add_parser('add', help='Add new habits (comma-separated)')
     add_parser.add_argument('habits', help='Names of habits to add (comma-separated)')
     
-    # Remove command
+    # Remove command (keeping this for compatibility but will handle date parsing separately)
     remove_parser = subparsers.add_parser('remove', aliases=['rm'], help='Remove habits by IDs (comma-separated)')
     remove_parser.add_argument('habit_ids', help='IDs of habits to remove (comma-separated)')
     
     # Help command
     subparsers.add_parser('help', help='Show this help message')
     
-    # Checkin command
+    # Checkin command (kept for compatibility but main logic is handled above)
     subparsers.add_parser('checkin', help='Cycle through all habits and track today\'s progress')
     
     # Parse arguments
